@@ -96,7 +96,7 @@ frappe.ui.form.States = class FormStates {
 			return approval_access;
 		}
 
-		frappe.workflow.get_transitions(this.frm.doc).then((transitions) => {
+		return frappe.workflow.get_transitions(this.frm.doc).then((transitions) => {
 			this.frm.page.clear_actions_menu();
 			transitions.forEach((d) => {
 				if (frappe.user_roles.includes(d.allowed) && has_approval_access(d)) {

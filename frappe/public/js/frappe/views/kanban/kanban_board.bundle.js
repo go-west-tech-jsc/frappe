@@ -720,6 +720,7 @@ frappe.provide("frappe.views");
 				doc_content: get_doc_content(card),
 				image_url: cur_list.get_image_url(card),
 				form_link: frappe.utils.get_form_link(card.doctype, card.name),
+				card: card, // Easy to extend
 			};
 
 			self.$card = $(frappe.render_template("kanban_card", opts)).appendTo(wrapper);
@@ -825,6 +826,8 @@ frappe.provide("frappe.views");
 		}
 
 		init();
+
+		return self; // Easy to extend
 	};
 
 	function prepare_card(card, state, doc) {
@@ -981,4 +984,6 @@ frappe.provide("frappe.views");
 			callback(indicators);
 		});
 	}
+
+	window.store = window.store || store;
 })();
