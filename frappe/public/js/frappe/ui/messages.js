@@ -26,15 +26,21 @@ frappe.throw = function (msg) {
 	throw new Error(msg.message);
 };
 
-frappe.confirm = function (message, confirm_action, reject_action) {
+frappe.confirm = function (
+	message,
+	confirm_action,
+	reject_action,
+	primary_label,
+	secondary_label
+) {
 	var d = new frappe.ui.Dialog({
 		title: __("Confirm", null, "Title of confirmation dialog"),
-		primary_action_label: __("Yes", null, "Approve confirmation dialog"),
+		primary_action_label: __(primary_label || "Yes", null, "Approve confirmation dialog"),
 		primary_action: () => {
 			confirm_action && confirm_action();
 			d.hide();
 		},
-		secondary_action_label: __("No", null, "Dismiss confirmation dialog"),
+		secondary_action_label: __(secondary_label || "No", null, "Dismiss confirmation dialog"),
 		secondary_action: () => d.hide(),
 	});
 
@@ -95,11 +101,7 @@ frappe.prompt = function (fields, callback, title, primary_label) {
 	});
 	d.set_primary_action(
 		primary_label || __("Submit", null, "Primary action of prompt dialog"),
-		function () {
-			var values = d.get_values();
-			if (!values) {
-				return;
-			}
+		function (values) {
 			d.hide();
 			callback(values);
 		}
@@ -192,6 +194,13 @@ frappe.msgprint = function (msg, title, is_minimizable) {
 		frappe.msg_dialog.indicator = frappe.msg_dialog.header.find(".indicator");
 	}
 
+	let msg_exists = false;
+	if (data.clear) {
+		frappe.msg_dialog.msg_area.empty();
+	} else {
+		msg_exists = frappe.msg_dialog.msg_area.html();
+	}
+
 	// setup and bind an action to the primary button
 	if (data.primary_action) {
 		if (
@@ -234,7 +243,7 @@ frappe.msgprint = function (msg, title, is_minimizable) {
 			data.primary_action.action
 		);
 	} else {
-		if (frappe.msg_dialog.has_primary_action) {
+		if (frappe.msg_dialog.has_primary_action && !msg_exists) {
 			frappe.msg_dialog.get_primary_btn().addClass("hide");
 			frappe.msg_dialog.has_primary_action = false;
 		}
@@ -253,13 +262,6 @@ frappe.msgprint = function (msg, title, is_minimizable) {
 
 	if (data.message.search(/<br>|<p>|<li>/) == -1) {
 		msg = frappe.utils.replace_newlines(data.message);
-	}
-
-	var msg_exists = false;
-	if (data.clear) {
-		frappe.msg_dialog.msg_area.empty();
-	} else {
-		msg_exists = frappe.msg_dialog.msg_area.html();
 	}
 
 	if (data.title || !msg_exists) {

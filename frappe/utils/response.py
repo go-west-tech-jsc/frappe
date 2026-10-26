@@ -23,6 +23,7 @@ import frappe.sessions
 import frappe.utils
 from frappe import _
 from frappe.core.doctype.access_log.access_log import make_access_log
+from frappe.core.doctype.file.utils import check_path_safety
 from frappe.utils import format_timedelta
 
 if TYPE_CHECKING:
@@ -51,7 +52,18 @@ def report_error(status_code):
 			_link_error_with_message_log(error_log, exc_value, frappe.message_log)
 			frappe.local.response.errors = [error_log]
 
-	response = build_response("json")
+	try:
+		response = build_response("json")
+	except TypeError:
+		error_keys = ("exception", "exc_type", "errors")
+		frappe.local.response = frappe._dict(
+			{key: frappe.local.response[key] for key in error_keys if key in frappe.local.response}
+		)
+		try:
+			response = build_response("json")
+		except TypeError:
+			response = Response(json.dumps({"exc_type": exc_type.__name__}), mimetype="application/json")
+
 	response.status_code = status_code
 
 	return response
@@ -265,6 +277,13 @@ def download_backup(path):
 			_("You need to be logged in and have System Manager Role to be able to access backups.")
 		)
 
+	filename = path.split("/backups/", 1)[1]
+	backup_path = frappe.get_site_path("private", "backups")
+	requested_path = frappe.get_site_path("private", "backups", filename)
+	is_safe = check_path_safety(base_path=backup_path, requested_path=requested_path)
+	if not is_safe:
+		frappe.throw(_("Invalid backup path"), frappe.PermissionError)
+
 	return send_private_file(path)
 
 
@@ -283,9 +302,30 @@ def download_private_file(path: str) -> Response:
 	return send_private_file(path.split("/private", 1)[1])
 
 
+FORCE_DOWNLOAD_EXTENSIONS = (
+	".svg",
+	".svgz",
+	".html",
+	".htm",
+	".xhtml",
+	".xht",
+	".shtml",
+	".shtm",
+	".mhtml",
+	".mht",
+	".xml",
+	".xsl",
+	".xslt",
+	".swf",
+)
+
+
 def send_private_file(path: str) -> Response:
 	path = os.path.join(frappe.local.conf.get("private_path", "private"), path.strip("/"))
 	filename = os.path.basename(path)
+
+	extension = os.path.splitext(path)[1]
+	as_attachment = extension.lower() in FORCE_DOWNLOAD_EXTENSIONS
 
 	if frappe.local.request.headers.get("X-Use-X-Accel-Redirect"):
 		path = "/protected/" + path
@@ -295,14 +335,13 @@ def send_private_file(path: str) -> Response:
 		response.headers["Accept-Ranges"] = "bytes"
 		response.headers["Content-Type"] = mimetypes.guess_type(filename)[0] or "application/octet-stream"
 
+		if as_attachment:
+			response.headers["Content-Disposition"] = f"attachment; filename*=UTF-8''{quote(filename)}"
+
 	else:
 		filepath = frappe.utils.get_site_path(path)
 		if not os.path.exists(filepath):
 			raise NotFound
-
-		extension = os.path.splitext(path)[1]
-		blacklist = [".svg", ".html", ".htm", ".xml"]
-		as_attachment = extension.lower() in blacklist
 
 		response = werkzeug.utils.send_file(
 			filepath,

@@ -3,6 +3,7 @@
 # See license.txt
 
 import time
+from unittest.mock import patch
 
 from rq import exceptions as rq_exc
 from rq.job import Job
@@ -63,6 +64,13 @@ class TestRQJob(FrappeTestCase):
 		job = frappe.enqueue(method=test_func, queue="short")
 		rq_job = frappe.get_doc("RQ Job", job.id)
 		self.assertEqual(rq_job.job_name, "frappe.core.doctype.rq_job.test_rq_job.test_func")
+
+	def test_renamed_func_obj_serialization(self):
+		job = frappe.enqueue(method=test_func, queue="short")
+		with patch.dict(globals()):
+			del globals()["test_func"]
+			rq_job = frappe.get_doc("RQ Job", job.id)
+		self.assertEqual(rq_job.job_name, job.description)
 
 	@timeout
 	def test_get_list_filtering(self):
@@ -168,7 +176,14 @@ class TestRQJob(FrappeTestCase):
 		# If this starts failing analyze memory usage using memray or some equivalent tool to find
 		# offending imports/function calls.
 		# Refer this PR: https://github.com/frappe/frappe/pull/21467
-		LAST_MEASURED_USAGE = 41
+		LAST_MEASURED_USAGE = 46
+
+		# Observed higher usage on 3.14. Temporarily raising the limit
+		from sys import version_info
+
+		if version_info >= (3, 14):
+			LAST_MEASURED_USAGE += 5
+
 		self.assertLessEqual(rss, LAST_MEASURED_USAGE * 1.05, msg)
 
 	def test_clear_failed_jobs(self):

@@ -21,7 +21,7 @@ from frappe.model.naming import set_new_name, validate_name
 from frappe.model.utils import is_virtual_doctype
 from frappe.model.workflow import set_workflow_state_on_action, validate_workflow
 from frappe.types import DF
-from frappe.utils import compare, cstr, date_diff, file_lock, flt, get_datetime_str, now
+from frappe.utils import compare, date_diff, file_lock, flt, get_datetime_str, now
 from frappe.utils.data import get_absolute_url, get_datetime, get_timedelta, getdate
 from frappe.utils.global_search import update_global_search
 
@@ -576,6 +576,9 @@ class Document(BaseDocument):
 
 	def update_single(self, d):
 		"""Updates values for Single type Document in `tabSingles`."""
+		if self.meta.is_virtual:
+			return
+
 		frappe.db.delete("Singles", {"doctype": self.doctype})
 		for field, value in d.items():
 			if field != "doctype":
@@ -623,7 +626,6 @@ class Document(BaseDocument):
 		self._validate_data_fields()
 		self._validate_selects()
 		self._validate_non_negative()
-		self._validate_length()
 		self._fix_rating_value()
 		self._validate_code_fields()
 		self._sync_autoname_field()
@@ -631,18 +633,19 @@ class Document(BaseDocument):
 		self._sanitize_content()
 		self._save_passwords()
 		self.validate_workflow()
+		self._validate_length()
 
 		for d in self.get_all_children():
 			d._validate_data_fields()
 			d._validate_selects()
 			d._validate_non_negative()
-			d._validate_length()
 			d._fix_rating_value()
 			d._validate_code_fields()
 			d._sync_autoname_field()
 			d._extract_images_from_text_editor()
 			d._sanitize_content()
 			d._save_passwords()
+			d._validate_length()
 		if self.is_new():
 			# don't set fields like _assign, _comments for new doc
 			for fieldname in optional_fields:
@@ -704,6 +707,8 @@ class Document(BaseDocument):
 
 				if field.fieldtype in table_fields:
 					fail = not self.is_child_table_same(field.fieldname)
+				elif field.fieldtype == "Datetime" and value and original_value:
+					fail = get_datetime(value) != get_datetime(original_value)
 				elif field.fieldtype in ("Date", "Datetime", "Time"):
 					fail = str(value) != str(original_value)
 				else:
@@ -863,7 +868,9 @@ class Document(BaseDocument):
 			self.check_docstatus_transition(0)
 			return
 
-		if cstr(previous.modified) != cstr(self._original_modified):
+		previous_modified = get_datetime(previous.modified) if previous.modified else None
+		original_modified = get_datetime(self._original_modified) if self._original_modified else None
+		if previous_modified != original_modified:
 			frappe.msgprint(
 				_("Error: Document has been modified after you have opened it")
 				+ (f" ({previous.modified}, {self.modified}). ")
@@ -996,8 +1003,11 @@ class Document(BaseDocument):
 
 		return children
 
-	def run_method(self, method, *args, **kwargs):
+	def run_method(self, method: str, *args, **kwargs):
 		"""run standard triggers, plus those in hooks"""
+
+		if method.startswith("_"):
+			raise Exception("Run method is for hooks, avoid usage on internal methods")
 
 		def fn(self, *args, **kwargs):
 			method_object = getattr(self, method, None)
@@ -1102,9 +1112,9 @@ class Document(BaseDocument):
 		return self._cancel()
 
 	@frappe.whitelist()
-	def rename(self, name: str, merge=False, force=False, validate_rename=True):
+	def rename(self, name: str | int, merge: bool = False, force: bool = False, validate_rename: bool = True):
 		"""Rename the document to `name`. This transforms the current object."""
-		return self._rename(name=name, merge=merge, force=force, validate_rename=validate_rename)
+		return self._rename(name=name, merge=merge, force=force)
 
 	def delete(self, ignore_permissions=False, force=False, *, delete_permanently=False):
 		"""Delete document."""
@@ -1419,7 +1429,7 @@ class Document(BaseDocument):
 				_("Table {0} cannot be empty").format(label), raise_exception or frappe.EmptyTableError
 			)
 
-	def round_floats_in(self, doc, fieldnames=None):
+	def round_floats_in(self, doc, fieldnames=None, do_not_round_fields=None):
 		"""Round floats for all `Currency`, `Float`, `Percent` fields for the given doc.
 
 		:param doc: Document whose numeric properties are to be rounded.
@@ -1433,6 +1443,9 @@ class Document(BaseDocument):
 		# PERF: flt internally has to resolve this if we don't specify it.
 		rounding_method = frappe.get_system_settings("rounding_method")
 		for fieldname in fieldnames:
+			if do_not_round_fields and fieldname in do_not_round_fields:
+				continue
+
 			doc.set(
 				fieldname,
 				flt(
@@ -1449,10 +1462,10 @@ class Document(BaseDocument):
 	@frappe.whitelist()
 	def add_comment(
 		self,
-		comment_type="Comment",
-		text=None,
-		comment_email=None,
-		comment_by=None,
+		comment_type: str = "Comment",
+		text: str | None = None,
+		comment_email: str | None = None,
+		comment_by: str | None = None,
 	):
 		"""Add a comment to this document.
 

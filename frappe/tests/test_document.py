@@ -10,7 +10,7 @@ from frappe.core.doctype.doctype.test_doctype import new_doctype
 from frappe.desk.doctype.note.note import Note
 from frappe.model.naming import make_autoname, parse_naming_series, revert_series_if_last
 from frappe.tests.utils import FrappeTestCase, timeout
-from frappe.utils import cint, now_datetime, set_request
+from frappe.utils import cint, get_datetime, now_datetime, set_request
 from frappe.website.serve import get_response
 
 from . import update_system_settings
@@ -138,6 +138,28 @@ class TestDocument(FrappeTestCase):
 		d1.save()
 		self.assertRaises(frappe.TimestampMismatchError, d2.save)
 
+	def test_save_after_insert_on_a_whole_second(self):
+		with self.freeze_time("2026-10-15 10:33:29"):
+			event = self.test_insert()
+
+		event.subject = "saved after a whole-second insert"
+		event.save()
+
+		saved = frappe.db.get_value("Event", event.name, ["subject", "creation"], as_dict=True)
+		self.assertEqual(saved.subject, "saved after a whole-second insert")
+		self.assertEqual(saved.creation, get_datetime("2026-10-15 10:33:29"))
+
+	def test_first_save_of_a_single(self):
+		doctype = new_doctype(
+			issingle=1, fields=[{"fieldname": "note", "fieldtype": "Data", "label": "Note"}]
+		).insert()
+
+		single = frappe.get_doc(doctype.name)
+		single.note = "first save"
+		single.save()
+
+		self.assertEqual(frappe.db.get_single_value(doctype.name, "note"), "first save")
+
 	def test_conflict_validation_single(self):
 		d1 = frappe.get_doc("Website Settings", "Website Settings")
 		d1.home_page = "test-web-page-1"
@@ -213,6 +235,47 @@ class TestDocument(FrappeTestCase):
 		d = self.test_insert()
 		d.sender = "abcde" * 100 + "@user.com"
 		self.assertRaises(frappe.CharacterLengthExceededError, d.save)
+
+	def test_varchar_length_after_sanitization(self):
+		unclosed_tag = "<strong>"
+		value = "X" * (140 - len(unclosed_tag)) + unclosed_tag
+
+		with self.set_user("test@example.com"):
+			doc = frappe.new_doc("Note")
+			doc.title = value
+
+			with self.assertRaises(frappe.CharacterLengthExceededError):
+				doc._validate()
+
+		self.assertGreater(len(doc.title), 140)
+
+	def test_oversized_varchar_sanitized_within_limit(self):
+		value = "X" * 130 + '<p onclick="alert(1)">x</p>'
+		self.assertGreater(len(value), 140)
+
+		with self.set_user("test@example.com"):
+			doc = frappe.new_doc("Note")
+			doc.title = value
+			doc._validate()
+
+		self.assertEqual(doc.title, "X" * 130 + "<p>x</p>")
+
+	def test_child_varchar_length_after_sanitization(self):
+		unclosed_tag = "<strong>"
+		value = "X" * (140 - len(unclosed_tag)) + unclosed_tag
+
+		with self.set_user("test@example.com"):
+			doc = frappe.new_doc("Workspace")
+			doc.update(
+				{"label": "Test Workspace", "module": "Core", "title": "Test Workspace", "type": "Workspace"}
+			)
+			doc.name = "Test Workspace"
+			doc.append("shortcuts", {"type": "URL", "label": value})
+
+			with self.assertRaises(frappe.CharacterLengthExceededError):
+				doc._validate()
+
+		self.assertGreater(len(doc.shortcuts[0].label), 140)
 
 	def test_xss_filter(self):
 		d = self.test_insert()
